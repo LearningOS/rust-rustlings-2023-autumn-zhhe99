@@ -936,3 +936,687 @@ fn main() {
 }
 
 ```
+
+# 六、泛型、trait 与生命周期
+
+先跳过 panic 把基本语法说完
+
+## 泛型
+
+泛型的含义与其他语言相同。首先看下结构体里泛型的定义：
+
+```rust
+
+// 相同类型
+struct Point<T> {
+    x: T,
+    y: T,
+}
+
+// 结构体方法的定义
+impl<T> Point<T> {
+    fn x(&self) -> &T {
+        &self.x
+    }
+}
+
+
+fn main() {
+    let integer = Point { x: 5, y: 10 };
+    let float = Point { x: 1.0, y: 4.0 };
+}
+
+
+// 不同类型
+struct Point2<T, U> {
+    x: T,
+    y: U,
+}
+
+// 结构体方法定义
+impl<T, U> Point2<T, U> {
+    fn mixup<V, W>(self, other: Point<V, W>) -> Point<T, W> {
+        Point {
+            x: self.x,
+            y: other.y,
+        }
+    }
+}
+
+fn main() {
+    let both_integer = Point2 { x: 5, y: 10 };
+    let both_float = Point2 { x: 1.0, y: 4.0 };
+    let integer_and_float = Point2 { x: 5, y: 4.0 };
+}
+
+
+```
+
+再看下常见的枚举类型：
+
+```rust
+
+// 相同类型
+enum Option<T> {
+    Some(T),
+    None,
+}
+
+// 不同类型
+enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+
+
+```
+
+普通泛型方法定义如下：
+
+```rust
+fn largest<T>(list: &[T]) -> T {
+    let largest = list[0];
+    largest
+}
+
+```
+
+## Trait
+
+Trait 在其他语言中可以理解为接口。一个类型的行为由其可供调用的方法构成。如果可以对不同类型调用相同的方法的话，这些类型就可以共享相同的行为了。trait 定义是一种将方法签名组合起来的方法，目的是定义一个实现某些目的所必需的行为的集合。
+
+下面是一个示例：
+
+```rust
+
+#![allow(unused)]
+fn main() {
+pub trait Summary {
+    fn summarize(&self) -> String;
+}
+
+pub struct NewsArticle {
+    pub headline: String,
+    pub location: String,
+    pub author: String,
+    pub content: String,
+}
+
+impl Summary for NewsArticle {
+    fn summarize(&self) -> String {
+        format!("{}, by {} ({})", self.headline, self.author, self.location)
+    }
+}
+
+pub struct Tweet {
+    pub username: String,
+    pub content: String,
+    pub reply: bool,
+    pub retweet: bool,
+}
+
+impl Summary for Tweet {
+    fn summarize(&self) -> String {
+        format!("{}: {}", self.username, self.content)
+    }
+}
+}
+
+```
+
+实现 trait 时需要注意的一个限制是，只有当 trait 或者要实现 trait 的类型位于 crate 的本地作用域时，才能为该类型实现 trait，但是我们不能为外部类型实现外部 trait。这个限制是被称为 相干性（coherence） 的程序属性的一部分，或者更具体的说是 孤儿规则（orphan rule），其得名于不存在父类型。这条规则确保了其他人编写的代码不会破坏你代码，反之亦然。没有这条规则的话，两个 crate 可以分别对相同类型实现相同的 trait，而 Rust 将无从得知应该使用哪一个实现。
+
+### trait 作为参数
+
+```rust
+pub fn notify(item: impl Summary) {
+    println!("Breaking news! {}", item.summarize());
+}
+
+```
+
+### trait bound 语法
+
+impl 形式是 trait bound 的语法糖。
+
+```rust
+pub fn notify<T: Summary>(item: T) {
+    println!("Breaking news! {}", item.summarize());
+}
+
+```
+
+### 多个 trait 参数
+
+```rust
+
+// impl 类型
+pub fn notify(item: impl Summary + Display) {
+}
+
+// trait bound 类型
+pub fn notify<T: Summary + Display>(item: T) {
+}
+```
+
+另外，可以用 where 语句简化 trait bound
+
+```rust
+fn some_function<T, U>(t: T, u: U) -> i32
+    where T: Display + Clone,
+          U: Clone + Debug
+{}
+
+```
+
+### 返回实现了某个 trait 的类型
+
+直接看例子：
+
+```rust
+fn returns_summarizable() -> impl Summary {
+    Tweet {
+        username: String::from("horse_ebooks"),
+        content: String::from("of course, as you probably already know, people"),
+        reply: false,
+        retweet: false,
+    }
+}
+
+```
+
+## 生命周期
+
+Rust 中的每一个引用都有其 生命周期（lifetime），也就是引用保持有效的作用域。生命周期的主要目标是避免悬垂引用。大部分时候生命周期是隐含并可以推断的，正如大部分时候类型也是可以推断的一样。类似于当因为有多种可能类型的时候必须注明类型，也会出现引用的生命周期以一些不同方式相关联的情况，所以 Rust 需要我们使用泛型生命周期参数来注明他们的关系，这样就能确保运行时实际使用的引用绝对是有效的。
+
+下面看一个需要使用生命周期的例子：
+
+```rust
+fn longest(x: &str, y: &str) -> &str {
+    if x.len() > y.len() {
+        x
+    } else {
+        y
+    }
+}
+
+```
+
+当我们定义这个函数的时候，并不知道传递给函数的具体值，所以也不知道到底是 if 还是 else 会被执行。借用检查器自身同样也无法确定，因为它不知道 x 和 y 的生命周期是如何与返回值的生命周期相关联的(不知道返回的是什么，因此无法通过分析作用域得到生命周期)。为了修复这个错误，我们将增加泛型生命周期参数来定义引用间的关系以便借用检查器可以进行分析。
+
+应该修改成这个样子：
+
+```rust
+
+fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {
+    if x.len() > y.len() {
+        x
+    } else {
+        y
+    }
+}
+
+```
+
+这里我们想要告诉 Rust 关于参数中的引用和返回值之间的限制是他们都必须拥有相同的生命周期.
+
+当在函数中使用生命周期标注时，这些标注出现在函数签名中，而不存在于函数体中的任何代码中。这是因为 Rust 能够分析函数中代码而不需要任何协助，不过当函数引用或被函数之外的代码引用时，让 Rust 自身分析出参数或返回值的生命周期几乎是不可能的。这些生命周期在每次函数被调用时都可能不同。这也就是为什么我们需要手动标记生命周期。
+
+让我们看看如何通过传递拥有不同具体生命周期的引用来限制 longest 函数的使用。
+
+```rust
+fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {
+    if x.len() > y.len() {
+        x
+    } else {
+        y
+    }
+}
+
+fn main() {
+    let string1 = String::from("long string is long");
+
+    {
+        let string2 = String::from("xyz");
+        let result = longest(string1.as_str(), string2.as_str());
+        println!("The longest string is {}", result);
+    }
+}
+
+```
+
+在这个例子中，string1 直到外部作用域结束都是有效的，string2 则在内部作用域中是有效的，而 result 则引用了一些直到内部作用域结束都是有效的值。借用检查器认可这些代码；它能够编译和运行，并打印出 The longest string is long string is long。
+
+但是下面的例子就无法运行了：
+
+```rust
+
+fn main() {
+    let string1 = String::from("long string is long");
+    let result;
+    {
+        let string2 = String::from("xyz");
+        result = longest(string1.as_str(), string2.as_str());
+    }
+    println!("The longest string is {}", result);
+}
+
+```
+
+如果从人的角度读上述代码，我们可能会觉得这个代码是正确的。 string1 更长，因此 result 会包含指向 string1 的引用。因为 string1 尚未离开作用域，对于 println! 来说 string1 的引用仍然是有效的。然而，我们通过生命周期参数告诉 Rust 的是： <b>longest 函数返回的引用的生命周期应该与传入参数的生命周期中较短那个保持一致。</b>因此，借用检查器这一代码，因为它可能会存在无效的引用。
+
+### 更深入的理解生命周期
+
+指定生命周期参数的正确方式依赖函数实现的具体功能。例如，如果将 longest 函数的实现修改为总是返回第一个参数而不是最长的字符串 slice，就不需要为参数 y 指定一个生命周期。如下例所示。
+
+```rust
+
+fn longest<'a>(x: &'a str, y: &str) -> &'a str {
+    x
+}
+```
+
+<b>当从函数返回一个引用，返回值的生命周期参数需要与一个参数的生命周期参数相匹配。</b>如果返回的引用 没有 指向任何一个参数，那么唯一的可能就是它指向一个函数内部创建的值，它将会是一个悬垂引用，因为它将会在函数结束时离开作用域。
+
+下面是另一个报错的例子：
+
+```rust
+fn longest<'a>(x: &str, y: &str) -> &'a str {
+    let result = String::from("really long string");
+    result.as_str()
+}
+```
+
+综上，生命周期语法是用于将函数的多个参数与其返回值的生命周期进行关联的。一旦他们形成了某种关联，Rust 就有了足够的信息来允许内存安全的操作并阻止会产生悬垂指针亦或是违反内存安全的行为。
+
+### 结构体定义中的生命周期标注
+
+接下来，我们将定义包含引用的结构体，不过这需要为结构体定义中的每一个引用添加生命周期标注。看下面的例子：
+
+```rust
+struct ImportantExcerpt<'a> {
+    part: &'a str,
+}
+```
+
+### 生命周期的省略
+
+但是在之前的代码中，我们从来没有考虑过生命周期的问题，程序也能通过编译，这是为什么呢？下面的三条规则可以帮助编译器自动的推断出引用的生命周期。
+
+<li>每一个是引用的参数都有它自己的生命周期参数。换句话说就是，有一个引用参数的函数有一个生命周期参数：fn foo<'a>(x: &'a i32)，有两个引用参数的函数有两个不同的生命周期参数，fn foo<'a, 'b>(x: &'a i32, y: &'b i32)，依此类推。</li>
+
+<li>如果只有一个输入生命周期参数，那么它被赋予所有输出生命周期参数：fn foo<'a>(x: &'a i32) -> &'a i32。</li>
+
+<li>如果方法有多个输入生命周期参数并且其中一个参数是 &self 或 &mut self，说明是个对象的方法(method)(译者注： 这里涉及 Rust 的面向对象，参见第 17 章), 那么所有输出生命周期参数被赋予 self 的生命周期。第三条规则使得方法更容易读写，因为只需更少的符号。</li>
+
+### 结构体方法中的生命周期标注
+
+结构体字段的生命周期必须总是在 impl 关键字之后声明并在结构体名称之后被使用，因为这些生命周期是结构体类型的一部分。impl 块里的方法签名中，引用可能与结构体字段中的引用相关联，也可能是独立的。
+
+```rust
+struct ImportantExcerpt<'a> {
+    part: &'a str,
+}
+
+impl<'a> ImportantExcerpt<'a> {
+    fn level(&self) -> i32 {
+        3
+    }
+}
+
+```
+
+### 静态生命周期
+
+'static，其生命周期能够存活于整个程序期间。所有的字符串字面量都拥有 'static 生命周期。下面是一个例子：
+
+```rust
+let s: &'static str = "I have a static lifetime.";
+```
+
+## 七、智能指针
+
+智能指针（smart pointers）是一类数据结构，它们的表现类似指针，但是也拥有额外的元数据和功能。在 Rust 中，普通引用和智能指针的一个额外的区别是引用是一类只借用数据的指针；相反，在大部分情况下，智能指针 拥有 它们指向的数据实际上，String 和 Vec\<T>就是智能指针！
+
+智能指针通常使用结构体实现。智能指针区别于常规结构体的显著特性在于其实现了 Deref 和 Drop trait。Deref trait 允许智能指针结构体实例表现的像引用一样，这样就可以编写既用于引用、又用于智能指针的代码。Drop trait 允许我们自定义当智能指针离开作用域时运行的代码。本章会讨论这些 trait 以及为什么对于智能指针来说它们很重要。
+
+### Box\<T>
+
+最简单直接的智能指针是 box，其类型是 Box\<T>。 box 允许你将一个值放在堆上而不是栈上。留在栈上的则是指向堆数据的指针。使用 Box\<T> 有如下几种情况：
+
+<li>当有一个在编译时未知大小的类型，而又想要在需要确切大小的上下文中使用这个类型值的时候。</li>
+<li>当有大量数据并希望在确保数据不被拷贝的情况下转移所有权的时候。</li>
+<li>当希望拥有一个值并只关心它的类型是否实现了特定 trait 而不是其具体类型的时候。</li>
+
+一个例子如下：
+
+```rust
+fn main() {
+    let b = Box::new(5);
+    println!("b = {}", b);
+}
+
+```
+
+#### Box 允许创建递归类型
+
+经典例子：链表。
+
+```rust
+enum List {
+    Cons(i32, Box<List>),
+    Nil,
+}
+
+use crate::List::{Cons, Nil};
+
+fn main() {
+    let list = Cons(1,
+        Box::new(Cons(2,
+            Box::new(Cons(3,
+                Box::new(Nil))))));
+}
+
+```
+
+### Deref trait
+
+为了体会默认情况下智能指针与引用的不同，让我们创建一个类似于标准库提供的 Box\<T> 类型的智能指针。接着学习如何增加使用解引用运算符的功能。
+
+从根本上说，Box\<T> 被定义为包含一个元素的元组结构体，所以我们以相同的方式定义了 MyBox\<T> 类型。我们还定义了 new 函数来对应定义于 Box\<T> 的 new 函数：
+
+```rust
+
+struct MyBox<T>(T);
+
+impl<T> MyBox<T> {
+    fn new(x: T) -> MyBox<T> {
+        MyBox(x)
+    }
+}
+```
+
+直接解引用会报错：
+
+```rust
+fn main() {
+    let x = 5;
+    let y = MyBox::new(x);
+
+    assert_eq!(5, x);
+    assert_eq!(5, *y);
+}
+```
+
+需要我们自己实现 Deref trait。
+
+```rust
+
+use std::ops::Deref;
+
+struct MyBox<T>(T);
+
+impl<T> Deref for MyBox<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+```
+
+当我们使用\*y 时，Rust 底层将其修改为
+
+```rust
+*(y.deref())
+```
+
+Rust 将 _ 运算符替换为先调用 deref 方法再进行普通解引用的操作，如此我们便不用担心是否还需手动调用 deref 方法了。Rust 的这个特性可以让我们写出行为一致的代码，无论是面对的是常规引用还是实现了 Deref 的类型。注意，每次当我们在代码中使用 _ 时， _ 运算符都被替换成了先调用 deref 方法再接着使用 _ 解引用的操作，且只会发生一次，不会对 \* 操作符无限递归替换，解引用出上面 i32 类型的值就停止了.
+
+### 函数和方法的隐式解引用强制转换
+
+解引用强制转换（deref coercions）是 Rust 在函数或方法传参上的一种便利。解引用强制转换只能工作在实现了 Deref trait 的类型上。解引用强制转换将一种类型（A）隐式转换为另外一种类型（B）的引用，因为 A 类型实现了 Deref trait，并且其关联类型是 B 类型。比如，解引用强制转换可以将 &String 转换为 &str，因为类型 String 实现了 Deref trait 并且其关联类型是 str。下面是一个例子：
+
+```rust
+use std::ops::Deref;
+
+struct MyBox<T>(T);
+
+impl<T> MyBox<T> {
+    fn new(x: T) -> MyBox<T> {
+        MyBox(x)
+    }
+}
+
+impl<T> Deref for MyBox<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+fn hello(name: &str) {
+    println!("Hello, {}!", name);
+}
+
+fn main() {
+    let m = MyBox::new(String::from("Rust"));
+    hello(&(*m)[..]);
+}
+
+```
+
+(\*m) 将 MyBox\<String> 解引用为 String。接着 & 和 [..] 获取了整个 String 的字符串 slice 来匹配 hello 的签名。没有解引用强制转换所有这些符号混在一起将更难以读写和理解。解引用强制转换使得 Rust 自动的帮我们处理这些转换。
+
+### Drop trait
+
+对于智能指针模式来说第二个重要的 trait 是 Drop，其允许我们在值要离开作用域时执行一些代码。可以为任何类型提供 Drop trait 的实现，同时所指定的代码被用于释放类似于文件或网络连接的资源。我们在智能指针上下文中讨论 Drop 是因为其功能几乎总是用于实现智能指针。例如，Box\<T> 自定义了 Drop 用来释放 box 所指向的堆空间。
+
+看下面的一个例子：
+
+```rust
+struct CustomSmartPointer {
+    data: String,
+}
+
+impl Drop for CustomSmartPointer {
+    fn drop(&mut self) {
+        println!("Dropping CustomSmartPointer with data `{}`!", self.data);
+    }
+}
+
+fn main() {
+    let c = CustomSmartPointer { data: String::from("my stuff") };
+    let d = CustomSmartPointer { data: String::from("other stuff") };
+    println!("CustomSmartPointers created.");
+}
+```
+
+### Rf\<T> 引用计数指针
+
+Rc<T> 用于当我们希望在堆上分配一些内存供程序的多个部分读取，而且无法在编译时确定程序的哪一部分会最后结束使用它的时候。如果确实知道哪部分是最后一个结束使用的话，就可以令其成为数据的所有者，正常的所有权规则就可以在编译时生效。注意 Rc<T> 只能用于单线程场景。
+
+看下面的一个例子：
+
+```rust
+enum List {
+    Cons(i32, Rc<List>),
+    Nil,
+}
+
+use crate::List::{Cons, Nil};
+use std::rc::Rc;
+
+fn main() {
+    let a = Rc::new(Cons(5, Rc::new(Cons(10, Rc::new(Nil)))));
+    let b = Cons(3, Rc::clone(&a));
+    let c = Cons(4, Rc::clone(&a));
+}
+
+```
+
+可以调用 a.clone() 而不是 Rc::clone(&a)，不过在这里 Rust 的习惯是使用 Rc::clone。Rc::clone 的实现并不像大部分类型的 clone 实现那样对所有数据进行深拷贝。Rc::clone 只会增加引用计数，这并不会花费多少时间。深拷贝可能会花费很长时间。通过使用 Rc::clone 进行引用计数，可以明显的区别深拷贝类的克隆和增加引用计数类的克隆。当查找代码中的性能问题时，只需考虑深拷贝类的克隆而无需考虑 Rc::clone 调用。
+
+下面一个例子可以用于查看引用计数：
+
+```rust
+enum List {
+    Cons(i32, Rc<List>),
+    Nil,
+}
+
+use crate::List::{Cons, Nil};
+use std::rc::Rc;
+
+fn main() {
+    let a = Rc::new(Cons(5, Rc::new(Cons(10, Rc::new(Nil)))));
+    println!("count after creating a = {}", Rc::strong_count(&a));
+    let b = Cons(3, Rc::clone(&a));
+    println!("count after creating b = {}", Rc::strong_count(&a));
+    {
+        let c = Cons(4, Rc::clone(&a));
+        println!("count after creating c = {}", Rc::strong_count(&a));
+    }
+    println!("count after c goes out of scope = {}", Rc::strong_count(&a));
+}
+```
+
+我们能够看到 a 中 Rc\<List> 的初始引用计数为 1，接着每次调用 clone，计数会增加 1。当 c 离开作用域时，计数减 1。不必像调用 Rc::clone 增加引用计数那样调用一个函数来减少计数；Drop trait 的实现当 Rc\<T> 值离开作用域时自动减少引用计数。
+
+从这个例子我们所不能看到的是，在 main 的结尾当 b 然后是 a 离开作用域时，此处计数会是 0，同时 Rc\<List> 被完全清理。使用 Rc\<T> 允许一个值有多个所有者，引用计数则确保只要任何所有者依然存在其值也保持有效。
+
+<b>通过不可变引用， Rc\<T> 允许在程序的多个部分之间只读地共享数据。如果 Rc\<T> 也允许多个可变引用，则会违反第 4 章讨论的借用规则之一：相同位置的多个可变借用可能造成数据竞争和不一致。</b>不过可以修改数据是非常有用的！这就是下一节 RefCall\<T>的相关内容。
+
+## RefCall\<T>与内部可变性模式
+
+不同于 Rc<T>，RefCell\<T> 代表其数据的唯一的所有权。那么是什么让 RefCell\<T> 不同于像 Box\<T> 这样的类型呢？回忆一下借用规则：
+
+<li>在任意给定时刻，只能拥有一个可变引用或任意数量的不可变引用 之一（而不是两者）。</li>
+<li>引用必须总是有效的。</li>
+对于引用和 Box<T>，借用规则的不可变性作用于编译时。对于 RefCell<T>，这些不可变性作用于 运行时。对于引用，如果违反这些规则，会得到一个编译错误。而对于 RefCell<T>，如果违反这些规则程序会 panic 并退出。因为一些分析是不可能的，如果 Rust 编译器不能通过所有权规则编译，它可能会拒绝一个正确的程序；从这种角度考虑它是保守的。如果 Rust 接受不正确的程序，那么用户也就不会相信 Rust 所做的保证了。然而，如果 Rust 拒绝正确的程序，虽然会给开发者带来不便，但不会带来灾难。RefCell<T> 正是用于当你确信代码遵守借用规则，而编译器不能理解和确定的时候。
+
+请看下面的一个示例：
+
+```rust
+
+#![allow(unused)]
+fn main() {
+pub trait Messenger {
+    fn send(&self, msg: &str);
+}
+
+pub struct LimitTracker<'a, T: Messenger> {
+    messenger: &'a T,
+    value: usize,
+    max: usize,
+}
+
+impl<'a, T> LimitTracker<'a, T>
+    where T: Messenger {
+    pub fn new(messenger: &T, max: usize) -> LimitTracker<T> {
+        LimitTracker {
+            messenger,
+            value: 0,
+            max,
+        }
+    }
+
+    pub fn set_value(&mut self, value: usize) {
+        self.value = value;
+
+        let percentage_of_max = self.value as f64 / self.max as f64;
+
+        if percentage_of_max >= 1.0 {
+            self.messenger.send("Error: You are over your quota!");
+        } else if percentage_of_max >= 0.9 {
+             self.messenger.send("Urgent warning: You've used up over 90% of your quota!");
+        } else if percentage_of_max >= 0.75 {
+            self.messenger.send("Warning: You've used up over 75% of your quota!");
+        }
+    }
+}
+}
+
+
+pub trait Messenger {
+    fn send(&self, msg: &str);
+}
+
+pub struct LimitTracker<'a, T: Messenger> {
+    messenger: &'a T,
+    value: usize,
+    max: usize,
+}
+
+impl<'a, T> LimitTracker<'a, T>
+    where T: Messenger {
+    pub fn new(messenger: &T, max: usize) -> LimitTracker<T> {
+        LimitTracker {
+            messenger,
+            value: 0,
+            max,
+        }
+    }
+
+    pub fn set_value(&mut self, value: usize) {
+        self.value = value;
+
+        let percentage_of_max = self.value as f64 / self.max as f64;
+
+        if percentage_of_max >= 1.0 {
+            self.messenger.send("Error: You are over your quota!");
+        } else if percentage_of_max >= 0.9 {
+             self.messenger.send("Urgent warning: You've used up over 90% of your quota!");
+        } else if percentage_of_max >= 0.75 {
+            self.messenger.send("Warning: You've used up over 75% of your quota!");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    struct MockMessenger {
+        sent_messages: RefCell<Vec<String>>,
+    }
+
+    impl MockMessenger {
+        fn new() -> MockMessenger {
+            MockMessenger { sent_messages: RefCell::new(vec![]) }
+        }
+    }
+
+    impl Messenger for MockMessenger {
+        fn send(&self, message: &str) {
+            self.sent_messages.borrow_mut().push(String::from(message));
+        }
+    }
+
+    #[test]
+    fn it_sends_an_over_75_percent_warning_message() {
+        // --snip--
+        let mock_messenger = MockMessenger::new();
+        let mut limit_tracker = LimitTracker::new(&mock_messenger, 100);
+        limit_tracker.set_value(75);
+
+        assert_eq!(mock_messenger.sent_messages.borrow().len(), 1);
+    }
+}
+fn main() {}
+
+```
+
+## RefCell\<T> 在运行时记录借用
+
+当创建不可变和可变引用时，我们分别使用 & 和 &mut 语法。对于 RefCell\<T> 来说，则是 borrow 和 borrow_mut 方法，这属于 RefCell\<T> 安全 API 的一部分。borrow 方法返回 Ref\<T> 类型的智能指针，borrow_mut 方法返回 RefMut 类型的智能指针。这两个类型都实现了 Deref，所以可以当作常规引用对待。
+
+RefCell\<T> 记录当前有多少个活动的 Ref\<T> 和 RefMut\<T> 智能指针。每次调用 borrow，RefCell\<T> 将活动的不可变借用计数加一。当 Ref\<T> 值离开作用域时，不可变借用计数减一。就像编译时借用规则一样，RefCell\<T> 在任何时候只允许有多个不可变借用或一个可变借用。
+
+如果我们尝试违反这些规则，相比引用时的编译时错误，RefCell\<T> 的实现会在运行时出现 panic。
+
+## 引用循环
+
+需要使用 Weak\<T>来缓解，待更新（2023.10.22）。
