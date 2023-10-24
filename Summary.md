@@ -2073,3 +2073,217 @@ Send 标记 trait 表明实现了 Send 的类型值的所有权可以在线程�
 智能指针 Rc\<T> 也不是 Sync 的，RefCell\<T>和 Cell\<T> 系列类型也不是 Sync 的。RefCell\<T> 在运行时所进行的借用检查也不是线程安全的。但是 Mutex\<T> 是 Sync 的。
 
 本并发部分的最后一句话：<b>手动实现 Send 和 Sync 是不安全的</b>。
+
+## 九、高级特征
+
+### unsafe 代码块
+
+可以通过 unsafe 关键字来切换到不安全 Rust，接着可以开启一个新的存放不安全代码的块。这里有五类可以在不安全 Rust 中进行而不能用于安全 Rust 的操作，这些操作是：
+
+<li>解引用裸指针。</li>
+<li>调用不安全的函数或方法。</li>
+<li>访问或修改可变静态变量。</li>
+<li>实现不安全 trait。</li>
+<li>访问 union 的字段。</li>
+
+下面来一条一条看。
+
+#### 解引用裸指针
+
+和引用一样，裸指针是不可变或可变的，分别写作 *const T 和 *mut T。这里的星号不是解引用运算符；它是类型名称的一部分。裸指针与引用和智能指针的区别在于：
+
+<li>允许忽略借用规则，可以同时拥有不可变和可变的指针，或多个指向相同位置的可变指针。</li>
+<li>不保证指向有效的内存。</li>
+<li>允许为空。</li>
+<li>不能实现任何自动清理功能。</li>
+
+下面的代码展示了如何从引用创建裸指针。
+
+```rust
+fn main() {
+    let mut num = 5;
+
+    let r1 = &num as *const i32;
+    let r2 = &mut num as *mut i32;
+}
+```
+
+可以在安全代码中创建裸指针，不过不能 解引用 裸指针和读取其指向的数据。现在我们要做的就是对裸指针使用解引用运算符 \*，这需要一个 unsafe 块。
+
+```rust
+fn main() {
+    let mut num = 5;
+
+    let r1 = &num as *const i32;
+    let r2 = &mut num as *mut i32;
+
+    unsafe {
+        println!("r1 is: {}", *r1);
+        println!("r2 is: {}", *r2);
+    }
+}
+
+```
+
+创建一个指针不会造成任何危险；只有当访问其指向的值时才有可能遇到无效的值。既然存在这么多的危险，为何还要使用裸指针呢？一个主要的应用场景便是调用 C 代码接口，这在下一部分 “调用不安全函数或方法” 中会讲到。另一个场景是构建借用检查器无法理解的安全抽象。
+
+#### 调用不安全函数或方法
+
+第二类可以在不安全块中进行的操作是调用不安全函数。不安全函数和方法与常规函数方法十分类似，除了其开头有一个额外的 unsafe。在此上下文中，关键字 unsafe 表示该函数具有调用时需要满足的要求，而 Rust 不会保证满足这些要求。通过在 unsafe 块中调用不安全函数，表明我们已经阅读过此函数的文档并对其是否满足函数自身的契约负责。
+
+```rust
+fn main() {
+    unsafe fn dangerous() {}
+
+    unsafe {
+        dangerous();
+    }
+}
+```
+
+#### 创建不安全代码的安全抽象
+
+直接看一个示例：
+
+```rust
+use std::slice;
+
+fn split_at_mut(values: &mut [i32], mid: usize) -> (&mut [i32], &mut [i32]) {
+    let len = values.len();
+    let ptr = values.as_mut_ptr();
+
+    assert!(mid <= len);
+
+    unsafe {
+        (
+            slice::from_raw_parts_mut(ptr, mid),
+            slice::from_raw_parts_mut(ptr.add(mid), len - mid),
+        )
+    }
+}
+
+fn main() {
+    let mut vector = vec![1, 2, 3, 4, 5, 6];
+    let (left, right) = split_at_mut(&mut vector, 3);
+}
+
+```
+
+#### 使用 extern 函数调用外部代码
+
+有时你的 Rust 代码可能需要与其他语言编写的代码交互。为此 Rust 有一个关键字，extern，有助于创建和使用 外部函数接口（Foreign Function Interface，FFI）。外部函数接口是一个编程语言用以定义函数的方式，其允许不同（外部）编程语言调用这些函数。
+
+```rust
+extern "C" {
+    fn abs(input: i32) -> i32;
+}
+
+fn main() {
+    unsafe {
+        println!("Absolute value of -3 according to C: {}", abs(-3));
+    }
+}
+```
+
+在 extern "C" 块中，列出了我们希望能够调用的另一个语言中的外部函数的签名和名称。"C" 部分定义了外部函数所使用的 应用二进制接口（application binary interface，ABI） —— ABI 定义了如何在汇编语言层面调用此函数。"C" ABI 是最常见的，并遵循 C 编程语言的 ABI。
+
+#### 实现不安全 trait
+
+当 trait 中至少有一个方法中包含编译器无法验证的不变式（invariant）时 trait 是不安全的。可以在 trait 之前增加 unsafe 关键字将 trait 声明为 unsafe，同时 trait 的实现也必须标记为 unsafe，如下例所示：
+
+```rust
+unsafe trait Foo {
+    // methods go here
+}
+
+unsafe impl Foo for i32 {
+    // method implementations go here
+}
+
+fn main() {}
+```
+
+#### 访问联合体中的字段
+
+仅适用于 unsafe 的最后一个操作是访问 联合体 中的字段，union 和 struct 类似，但是在一个实例中同时只能使用一个声明的字段。联合体主要用于和 C 代码中的联合体交互。访问联合体的字段是不安全的，因为 Rust 无法保证当前存储在联合体实例中数据的类型。可以查看 参考 Rust 文档 了解有关联合体的更多信息。
+
+### 高级 trait
+
+#### 关联类型在 trait 定义中指定占位符类型
+
+关联类型（associated types）是一个将类型占位符与 trait 相关联的方式，这样 trait 的方法签名中就可以使用这些占位符类型。trait 的实现者会针对特定的实现在这个占位符类型指定相应的具体类型。如此可以定义一个使用多种类型的 trait，直到实现此 trait 时都无需知道这些类型具体是什么。
+
+（看不懂，之后再写吧）
+
+#### 高级函数
+
+看一下函数指针：函数指针实现了所有三个闭包 trait（Fn、FnMut 和 FnOnce），所以总是可以在调用期望闭包的函数时传递函数指针作为参数。倾向于编写使用泛型和闭包 trait 的函数，这样它就能接受函数或闭包作为参数。
+
+一个只期望接受 fn 而不接受闭包的情况的例子是与不存在闭包的外部代码交互时：C 语言的函数可以接受函数作为参数，但 C 语言没有闭包。
+
+```rust
+fn add_one(x: i32) -> i32 {
+    x + 1
+}
+
+fn do_twice(f: fn(i32) -> i32, arg: i32) -> i32 {
+    f(arg) + f(arg)
+}
+
+fn main() {
+    let answer = do_twice(add_one, 5);
+
+    println!("The answer is: {}", answer);
+}
+
+```
+
+#### 返回闭包
+
+（先跳过）
+
+#### 宏
+
+<b>声明宏</b>
+
+可以使用 macro_rules! 来定义声明宏。让我们通过查看 vec! 宏定义来探索如何使用 macro_rules! 结构。
+
+```rust
+#[macro_export]
+macro_rules! vec {
+    ( $( $x:expr ),* ) => {
+        {
+            let mut temp_vec = Vec::new();
+            $(
+                temp_vec.push($x);
+            )*
+            temp_vec
+        }
+    };
+}
+```
+
+#[macro_export] 注解表明只要导入了定义这个宏的 crate，该宏就应该是可用的。如果没有该注解，这个宏不能被引入作用域。
+
+接着使用 macro_rules! 和宏名称开始宏定义，且所定义的宏并 不带 感叹号。名字后跟大括号表示宏定义体，在该例中宏名称是 vec 。
+
+vec! 宏的结构和 match 表达式的结构类似。此处有一个分支模式 ( $( $x:expr ),\* ) ，后跟 => 以及和模式相关的代码块。如果模式匹配，该相关代码块将被执行。这里这个宏只有一个模式，那就只有一个有效匹配方向，其他任何模式方向都会导致错误。更复杂的宏会有多个分支模式。
+
+上面的宏等价于下面的代码。
+
+```rust
+{
+    let mut temp_vec = Vec::new();
+    temp_vec.push(1);
+    temp_vec.push(2);
+    temp_vec.push(3);
+    temp_vec
+}
+
+```
+
+<b>过程宏</b>
+
+第二种形式的宏被称为 过程宏（procedural macros），因为它们更像函数（一种过程类型）。过程宏接收 Rust 代码作为输入，在这些代码上进行操作，然后产生另一些代码作为输出，而非像声明式宏那样匹配对应模式然后以另一部分代码替换当前代码。有三种类型的过程宏（自定义派生（derive），类属性和类函数），不过它们的工作方式都类似。
+
+## (剩下的语法之后再来整理吧，我觉得这些应付 OS 够用了)
